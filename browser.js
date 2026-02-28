@@ -1,10 +1,12 @@
 const fs = require('fs');
-const { BASE_URL, PORTAL_URL, COOKIES_FILE, IVAS_EMAIL, IVAS_PASSWORD, LOGIN_URL } = require('./config');
+const { BASE_URL, PORTAL_URL, COOKIES_FILE } = require('./config');
 
 // ============================================================
 // CREDENTIALS (from .env)
 // ============================================================
-
+const IVAS_EMAIL    = process.env.IVAS_EMAIL    || '';
+const IVAS_PASSWORD = process.env.IVAS_PASSWORD || '';
+const LOGIN_URL     = `${BASE_URL}/login`;
 
 // ============================================================
 // STATE
@@ -98,12 +100,20 @@ function startAutoRefresh() {
     if (sessionRefreshTimer) clearInterval(sessionRefreshTimer);
     sessionRefreshTimer = setInterval(async () => {
         if (!page || !sessionValid) return;
+
+        // Pause monitor during navigation — fetchSmsRanges will skip if !pageReady
+        pageReady = false;
         console.log('🔄 Auto-refreshing session...');
+
         try {
             await page.goto(PORTAL_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+            await new Promise(r => setTimeout(r, 1500));
             await refreshSession();
         } catch (e) {
             console.error('Auto-refresh error:', e.message);
+        } finally {
+            // Always restore pageReady so monitor can continue
+            pageReady = true;
         }
     }, 5 * 60 * 1000); // every 5 minutes
 }
