@@ -185,10 +185,22 @@ async function fetchSmsForNumber(number, rangeName) {
 
 // ─── MAIN: FETCH ALL NEW SMS ─────────────────────────────────
 async function fetchAllSms() {
-    if (!isPageReady()) return [];
+    if (!isPageReady()) {
+        console.log('⏸ Page not ready (session refresh in progress) — skipping cycle');
+        return [];
+    }
 
     try {
-        const ranges = await fetchSmsRanges();
+        let ranges = await fetchSmsRanges();
+
+        // If 0 ranges, do ONE retry after 3s — handles page not fully loaded
+        if (ranges.length === 0 && isPageReady()) {
+            console.log('↩️  0 ranges — waiting 3s and retrying once...');
+            await new Promise(r => setTimeout(r, 3000));
+            if (!isPageReady()) return [];
+            ranges = await fetchSmsRanges();
+        }
+
         if (ranges.length === 0) return [];
 
         await detectNewRanges(ranges);
