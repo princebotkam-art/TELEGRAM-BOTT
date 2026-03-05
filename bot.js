@@ -66,6 +66,18 @@ function markOtpSent(msgId, otp, fullMessage) {
 }
 
 // ============================================================
+// MEMBERSHIP CHECK
+// ============================================================
+async function isMemberOfGroup(userId) {
+    try {
+        const member = await bot.getChatMember(GROUP_ID, userId);
+        return ['member', 'administrator', 'creator'].includes(member.status);
+    } catch (e) {
+        return false;
+    }
+}
+
+// ============================================================
 // MESSAGE FORMATTERS
 // ============================================================
 function formatOtpMessage(data) {
@@ -94,9 +106,16 @@ function mainMenuKeyboard() {
                 { text: '📊 Status', callback_data: 'status' },
                 { text: '📈 Stats',  callback_data: 'stats'  },
             ],
-            [{ text: '🔍 Check OTPs Now',      callback_data: 'check'       }],
             [{ text: '🧪 Send Test OTP',        callback_data: 'test'        }],
-            [{ text: '🔬 Debug: Fetch Raw SMS', callback_data: 'test_fetch'  }],
+        ],
+    };
+}
+
+function joinKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: '📢 Join Our Group', url: CHANNEL_LINK }],
+            [{ text: '✅ Verify Membership', callback_data: 'verify_membership' }],
         ],
     };
 }
@@ -237,11 +256,25 @@ async function alertNewRanges(newRanges) {
 // ============================================================
 function setupBotHandlers() {
 
-    // /start
+    // /start — membership gate
     bot.onText(/\/start/, async (msg) => {
+        const userId = msg.from.id;
+        const chatId = msg.chat.id;
+
+        const isMember = await isMemberOfGroup(userId);
+
+        if (!isMember) {
+            await bot.sendMessage(
+                chatId,
+                '🔒 <b>Access Restricted</b>\n\nYou must join our group to use this bot.\n\nClick the button below to join, then come back and press <b>Verify Membership</b>.',
+                { parse_mode: 'HTML', reply_markup: joinKeyboard() }
+            );
+            return;
+        }
+
         await bot.sendMessage(
-            msg.chat.id,
-            '🏠 <b>Welcome to NEXUSBOT!</b>\n\nI monitor IVASMS for new OTPs and forward them instantly.',
+            chatId,
+            '🏠 <b>Welcome to NEXUSBOT!</b>\n\nGet virtual numbers and receive OTPs instantly — fast, reliable, and automatic.',
             { parse_mode: 'HTML', reply_markup: mainMenuKeyboard() }
         );
     });
@@ -262,6 +295,38 @@ function setupBotHandlers() {
             parse_mode:   'HTML',
             reply_markup: keyboard !== undefined ? keyboard : mainMenuKeyboard(),
         });
+
+        // ── VERIFY MEMBERSHIP ──────────────────────────────────
+        if (data === 'verify_membership') {
+            await bot.answerCallbackQuery(query.id, { text: 'Checking...' }).catch(() => {});
+            const isMember = await isMemberOfGroup(userId);
+
+            if (!isMember) {
+                await edit(
+                    '❌ <b>Not a member yet!</b>\n\nPlease join our group first, then press <b>Verify Membership</b> again.',
+                    joinKeyboard()
+                );
+                return;
+            }
+
+            await edit(
+                '✅ <b>Membership verified!</b>\n\n🏠 <b>Welcome to NEXUSBOT!</b>\n\nI monitor IVASMS for new OTPs and forward them instantly.',
+                mainMenuKeyboard()
+            );
+            return;
+        }
+
+        // ── MEMBERSHIP GATE FOR ALL OTHER ACTIONS ──────────────
+        if (data !== 'verify_membership') {
+            const isMember = await isMemberOfGroup(userId);
+            if (!isMember) {
+                await edit(
+                    '🔒 <b>Access Restricted</b>\n\nYou must join our group to use this bot.\n\nClick the button below to join, then come back and press <b>Verify Membership</b>.',
+                    joinKeyboard()
+                );
+                return;
+            }
+        }
 
         // ── MAIN MENU ──────────────────────────────────────────
         if (data === 'menu') {
@@ -417,20 +482,6 @@ function setupBotHandlers() {
                 numberAssignedKeyboard()
             );
 
-        // ── CHECK OTPs NOW ─────────────────────────────────────
-        } else if (data === 'check') {
-            await edit('🔍 <b>Checking for new OTPs...</b>');
-            const messages = await fetchAllSms();
-            let sent = 0;
-            for (const msg of messages) {
-                if (!isOtpSent(msg.id)) { await sendOtpToGroup(msg); sent++; }
-            }
-            await edit(
-                sent > 0
-                    ? `✅ <b>Found and forwarded ${sent} new OTP(s)!</b>`
-                    : '📭 <b>No new OTPs found.</b>\n\nChecking automatically every 10 seconds.'
-            );
-
         // ── STATUS ─────────────────────────────────────────────
         } else if (data === 'status') {
             const uptime = Math.floor((Date.now() - botStats.startTime.getTime()) / 1000);
@@ -471,74 +522,6 @@ function setupBotHandlers() {
                 message:   '# Your WhatsApp code 947-444\nDont share this code with others\n4sgLq1p5sV6',
             });
             await edit('✅ <b>Test OTP sent to the group!</b>');
-
-        // ── DEBUG: FETCH RAW SMS ───────────────────────────────
-        } else if (data === 'test_fetch') {
-            await edit('🔍 <b>Fetching raw SMS from portal...</b>');
-
-            try {
-                const ranges = await fetchSmsRanges();
-
-                if (ranges.length === 0) {
-                    await edit('⚠️ No ranges found — try again in a moment.');
-                    return;
-                }
-
-                const randomRange = pickRandom(ranges);
-                await bot.sendMessage(chatId,
-                    `📡 Range picked: <b>${randomRange}</b>\nFetching numbers...`,
-                    { parse_mode: 'HTML' }
-                );
-
-                const numbers = await fetchNumbersForRange(randomRange);
-
-                if (numbers.length === 0) {
-                    await bot.sendMessage(chatId,
-                        `⚠️ No numbers found in <b>${randomRange}</b>\nCheck console for raw HTML.`,
-                        { parse_mode: 'HTML' }
-                    );
-                    return;
-                }
-
-                await bot.sendMessage(chatId,
-                    `📱 <b>${numbers.length} number(s):</b>\n<code>${numbers.join('\n')}</code>`,
-                    { parse_mode: 'HTML' }
-                );
-
-                const randomNumber = pickRandom(numbers);
-                await bot.sendMessage(chatId,
-                    `🔍 Fetching SMS for: <code>${randomNumber}</code>`,
-                    { parse_mode: 'HTML' }
-                );
-
-                const smsList = await fetchSmsForNumber(randomNumber, randomRange);
-
-                if (smsList.length === 0) {
-                    await bot.sendMessage(chatId,
-                        `📭 No SMS found for <code>${randomNumber}</code>\n\nCheck console for raw HTML.`,
-                        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard() }
-                    );
-                    return;
-                }
-
-                for (const sms of smsList) {
-                    await bot.sendMessage(chatId,
-                        `📨 <b>Raw SMS:</b>\n<blockquote>${escapeHtml(sms)}</blockquote>`,
-                        { parse_mode: 'HTML' }
-                    );
-                }
-
-                await bot.sendMessage(chatId,
-                    `✅ Done! Found <b>${smsList.length}</b> SMS message(s).`,
-                    { parse_mode: 'HTML', reply_markup: mainMenuKeyboard() }
-                );
-
-            } catch (err) {
-                await bot.sendMessage(chatId,
-                    `❌ Error: <code>${err.message}</code>`,
-                    { parse_mode: 'HTML', reply_markup: mainMenuKeyboard() }
-                );
-            }
         }
     });
 }
